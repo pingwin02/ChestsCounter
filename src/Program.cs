@@ -151,6 +151,12 @@ public static class Program
                         res = new MatchResult(Path.GetFileName(file), fb.Day, fb.DurationMs, 0, 0, "TIMEOUT", new List<PlayerChestStat>());
                     }
 
+                    if (res.Status == "OK")
+                    {
+                        string jsonPath = Path.Combine(replaysDir, Path.GetFileNameWithoutExtension(res.FileName) + ".json");
+                        File.WriteAllText(jsonPath, JsonSerializer.Serialize(res));
+                    }
+
                     freshResults.Add(res);
                     int done = Interlocked.Increment(ref completed);
                     lock (Console.Out)
@@ -171,11 +177,6 @@ public static class Program
             foreach (var res in freshResults)
             {
                 cachedByFile[res.FileName] = res;
-                if (res.Status == "OK")
-                {
-                    string jsonPath = Path.Combine(replaysDir, Path.GetFileNameWithoutExtension(res.FileName) + ".json");
-                    File.WriteAllText(jsonPath, JsonSerializer.Serialize(res));
-                }
             }
         }
 

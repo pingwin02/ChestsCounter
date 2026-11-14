@@ -26,6 +26,6 @@ Optional arguments:
 
 ## Output
 
-- Copies new/updated replays from the Demos folder into a local `replays/` archive so matches are preserved past Fortnite's 100-replay limit
+- Caches parsed match data as `.json` files in `replays/` so only new or updated replays are analyzed and matches are preserved past Fortnite's 100-replay limit
 - Live progress bar and summary in the terminal
 - Interactive HTML chart report saved to `reports/chests_report_YYYY-MM-DD_HH-mm-ss.html`

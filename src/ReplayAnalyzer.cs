@@ -36,7 +36,8 @@ public sealed record MatchResult(
     int OwnerOpened,
     int TeammatesOpened,
     string Status,
-    List<PlayerChestStat> Players
+    List<PlayerChestStat> Players,
+    long FileLength = 0
 );
 
 internal sealed class SkipBunchException : Exception { }
@@ -421,7 +422,8 @@ public static class ReplayAnalyzer
                 .Select(kv => new PlayerChestStat(kv.Key, kv.Value.Name, kv.Value.IsOwner, kv.Value.Chests))
                 .ToList();
 
-            return new MatchResult(name, day, ms, ownerOpened, teammatesOpened, "OK", players);
+            long fileLen = new FileInfo(file).Length;
+            return new MatchResult(name, day, ms, ownerOpened, teammatesOpened, "OK", players, fileLen);
         }
         catch (Exception ex)
         {

@@ -69,104 +69,127 @@ public static class Program
         }
 
         string replaysDir = Path.Combine(Directory.GetCurrentDirectory(), "replays");
+        Directory.CreateDirectory(replaysDir);
+
+        var cachedByFile = new Dictionary<string, MatchResult>(StringComparer.OrdinalIgnoreCase);
+        foreach (var jsonFile in Directory.GetFiles(replaysDir, "*.json"))
+        {
+            try
+            {
+                var cached = JsonSerializer.Deserialize<MatchResult>(File.ReadAllText(jsonFile));
+                if (cached != null)
+                {
+                    cachedByFile[cached.FileName] = cached;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        var toAnalyze = new List<string>();
         if (Directory.Exists(demosDir))
         {
-            Directory.CreateDirectory(replaysDir);
-            int copied = 0;
-            foreach (var src in Directory.GetFiles(demosDir, "*.replay"))
+            foreach (var src in Directory.GetFiles(demosDir, "*.replay").OrderBy(f => f))
             {
                 if (ReplayAnalyzer.ParseFileDate(src).Date < startDate)
                 {
                     continue;
                 }
-                string dest = Path.Combine(replaysDir, Path.GetFileName(src));
-                try
+                string fileName = Path.GetFileName(src);
+                long srcLen = 0;
+                try { srcLen = new FileInfo(src).Length; } catch { }
+                if (cachedByFile.TryGetValue(fileName, out var existing) &&
+                    existing.Status == "OK" &&
+                    (existing.FileLength == 0 || existing.FileLength == srcLen))
                 {
-                    var srcInfo = new FileInfo(src);
-                    if (!File.Exists(dest) || new FileInfo(dest).Length != srcInfo.Length)
-                    {
-                        File.Copy(src, dest, overwrite: true);
-                        copied++;
-                    }
+                    continue;
                 }
-                catch
-                {
-                }
-            }
-            if (copied > 0)
-            {
-                Console.WriteLine($"Copied {copied} new/updated replay(s) to {replaysDir}");
+                toAnalyze.Add(src);
             }
         }
-        else if (!Directory.Exists(replaysDir))
+        else if (cachedByFile.Count == 0)
         {
             Console.WriteLine($"Demos directory not found: {demosDir}");
             return;
         }
 
-        var files = Directory.GetFiles(replaysDir, "*.replay")
-            .Where(f => ReplayAnalyzer.ParseFileDate(f).Date >= startDate)
-            .OrderBy(f => f)
-            .ToArray();
+        Console.WriteLine($"Cached replays: {cachedByFile.Count} | New/updated to analyze: {toAnalyze.Count}");
 
-        if (files.Length == 0)
+        if (toAnalyze.Count > 0)
         {
-            Console.WriteLine($"No replay files found since {startDate:yyyy-MM-dd} in {replaysDir}");
-            return;
-        }
+            var sw = Stopwatch.StartNew();
+            var queue = new ConcurrentQueue<string>(toAnalyze);
+            var freshResults = new ConcurrentBag<MatchResult>();
+            string exePath = Environment.ProcessPath!;
+            int completed = 0;
+            int total = toAnalyze.Count;
+            int workerCount = Math.Min(4, Math.Max(1, Environment.ProcessorCount / 2));
 
-        Console.WriteLine($"Found {files.Length} replay files since {startDate:yyyy-MM-dd}. Starting analysis...");
-        var sw = Stopwatch.StartNew();
-        var queue = new ConcurrentQueue<string>(files);
-        var results = new ConcurrentBag<MatchResult>();
-        string exePath = Environment.ProcessPath!;
-        int completed = 0;
-        int total = files.Length;
-        int workerCount = Math.Min(4, Math.Max(1, Environment.ProcessorCount / 2));
-
-        var workers = Enumerable.Range(0, workerCount).Select(_ => Task.Run(() =>
-        {
-            Process? proc = null;
-            while (queue.TryDequeue(out var file))
+            var workers = Enumerable.Range(0, workerCount).Select(_ => Task.Run(() =>
             {
-                proc ??= StartWorker(exePath);
-                proc.StandardInput.WriteLine(file);
-                proc.StandardInput.Flush();
-
-                var readTask = proc.StandardOutput.ReadLineAsync();
-                MatchResult res;
-                if (readTask.Wait(TimeSpan.FromSeconds(8)) && readTask.Result != null)
+                Process? proc = null;
+                while (queue.TryDequeue(out var file))
                 {
-                    res = JsonSerializer.Deserialize<MatchResult>(readTask.Result)
-                        ?? new MatchResult(Path.GetFileName(file), ReplayAnalyzer.ParseFileDate(file).Date, 0, 0, 0, "ERR", new List<PlayerChestStat>());
+                    proc ??= StartWorker(exePath);
+                    proc.StandardInput.WriteLine(file);
+                    proc.StandardInput.Flush();
+
+                    var readTask = proc.StandardOutput.ReadLineAsync();
+                    MatchResult res;
+                    if (readTask.Wait(TimeSpan.FromSeconds(8)) && readTask.Result != null)
+                    {
+                        res = JsonSerializer.Deserialize<MatchResult>(readTask.Result)
+                            ?? new MatchResult(Path.GetFileName(file), ReplayAnalyzer.ParseFileDate(file).Date, 0, 0, 0, "ERR", new List<PlayerChestStat>());
+                    }
+                    else
+                    {
+                        try { proc.Kill(true); } catch { }
+                        proc.Dispose();
+                        proc = null;
+                        var fb = ReplayAnalyzer.ReadHeaderFallback(file);
+                        res = new MatchResult(Path.GetFileName(file), fb.Day, fb.DurationMs, 0, 0, "TIMEOUT", new List<PlayerChestStat>());
+                    }
+
+                    freshResults.Add(res);
+                    int done = Interlocked.Increment(ref completed);
+                    lock (Console.Out)
+                    {
+                        PrintProgress(done, total, sw.Elapsed.TotalSeconds, res.FileName, res.Status);
+                    }
                 }
-                else
+
+                if (proc != null)
                 {
                     try { proc.Kill(true); } catch { }
                     proc.Dispose();
-                    proc = null;
-                    var fb = ReplayAnalyzer.ReadHeaderFallback(file);
-                    res = new MatchResult(Path.GetFileName(file), fb.Day, fb.DurationMs, 0, 0, "TIMEOUT", new List<PlayerChestStat>());
                 }
+            })).ToArray();
 
-                results.Add(res);
-                int done = Interlocked.Increment(ref completed);
-                lock (Console.Out)
-                {
-                    PrintProgress(done, total, sw.Elapsed.TotalSeconds, res.FileName, res.Status);
-                }
-            }
+            Task.WaitAll(workers);
 
-            if (proc != null)
+            foreach (var res in freshResults)
             {
-                try { proc.Kill(true); } catch { }
-                proc.Dispose();
+                cachedByFile[res.FileName] = res;
+                if (res.Status == "OK")
+                {
+                    string jsonPath = Path.Combine(replaysDir, Path.GetFileNameWithoutExtension(res.FileName) + ".json");
+                    File.WriteAllText(jsonPath, JsonSerializer.Serialize(res));
+                }
             }
-        })).ToArray();
+        }
 
-        Task.WaitAll(workers);
+        var ordered = cachedByFile.Values
+            .Where(r => r.Day.Date >= startDate)
+            .OrderBy(r => r.Day)
+            .ThenBy(r => r.FileName)
+            .ToList();
 
-        var ordered = results.OrderBy(r => r.Day).ThenBy(r => r.FileName).ToList();
+        if (ordered.Count == 0)
+        {
+            Console.WriteLine($"No replay data found since {startDate:yyyy-MM-dd}.");
+            return;
+        }
         string reportsDir = Path.Combine(Directory.GetCurrentDirectory(), "reports");
         Directory.CreateDirectory(reportsDir);
         string reportName = $"chests_report_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.html";

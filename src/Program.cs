@@ -167,8 +167,10 @@ public static class Program
         Task.WaitAll(workers);
 
         var ordered = results.OrderBy(r => r.Day).ThenBy(r => r.FileName).ToList();
+        string reportsDir = Path.Combine(Directory.GetCurrentDirectory(), "reports");
+        Directory.CreateDirectory(reportsDir);
         string reportName = $"chests_report_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.html";
-        string htmlPath = Path.Combine(Directory.GetCurrentDirectory(), reportName);
+        string htmlPath = Path.Combine(reportsDir, reportName);
         ReportGenerator.GenerateHtmlReport(ordered, startDate, htmlPath);
         ReportGenerator.PrintSummary(ordered, startDate, htmlPath);
     }

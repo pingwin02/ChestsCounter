@@ -311,7 +311,7 @@ public static class ReplayAnalyzer
         {
             var reader = new ReplayReader(parseMode: ParseMode.EventsOnly);
             var replay = reader.ReadReplay(file);
-            var day = replay.Info?.Timestamp.ToLocalTime().Date ?? fallbackDate;
+            var day = replay.Info?.Timestamp.Date ?? fallbackDate;
             long ms = replay.Info?.LengthInMs ?? 0;
             return (day, ms);
         }
@@ -330,7 +330,7 @@ public static class ReplayAnalyzer
             var reader = new SafeChestReplayReader();
             var replay = reader.ReadReplay(file);
             long ms = replay.Info?.LengthInMs ?? fallback.DurationMs;
-            var day = replay.Info?.Timestamp.ToLocalTime().Date ?? fallback.Day;
+            var day = replay.Info?.Timestamp.Date ?? fallback.Day;
 
             var owner = replay.PlayerData?.FirstOrDefault(p => p.IsReplayOwner);
             uint? ownerPsGuid = replay.GameData?.RecorderId;
